@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>鉄工屋根材 配送スケジュール管理</title>
+    
+    <!-- Tailwind CSS (デザイン用) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vue.js 3 (ロジック用) -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- FontAwesome (アイコン用) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- SortableJS (ドラッグ&ドロップ用) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.0/Sortable.min.js"></script>
+
+    <style>
+        /* カスタムスクロールバー */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        /* セルのスタイル調整 */
+        .cell-input {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: transparent;
+            outline: none;
+            padding: 8px;
+            font-size: 0.95rem;
+            resize: none; /* テキストエリアのリサイズ無効 */
+            field-sizing: content; /* Chrome新機能（対応ブラウザのみ） */
+        }
+        
+        /* ステータス色定義 */
+        .bg-status-gray { background-color: #f3f4f6; } /* 未対応 */
+        .bg-status-yellow { background-color: #fef08a; } /* 準備中 */
+        .bg-status-green { background-color: #bbf7d0; } /* 配送済み */
+        .bg-status-red { background-color: #fecaca; } /* 問題あり */
+
+        /* ドラッグハンドル */
+        .drag-handle { cursor: grab; color: #cbd5e1; }
+        .drag-handle:active { cursor: grabbing; }
+
+        /* テーブルのレイアウト固定 */
+        table { border-collapse: separate; border-spacing: 0; }
+        th, td { border: 1px solid #e2e8f0; min-width: 120px; vertical-align: top; }
+        
+        /* コンテキストメニュー */
+        .context-menu {
+            position: fixed;
+            z-index: 50;
+            background: white;
+            border: 1px solid #ddd;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .context-menu-item {
+            padding: 8px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .context-menu-item:hover { background-color: #f3f4f6; }
+        
+        [v-cloak] { display: none; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 h-screen flex flex-col overflow-hidden">
+
+<div id="app" v-cloak class="flex flex-col h-full">
+
+    <!-- ヘッダーエリア -->
+    <header class="bg-slate-800 text-white p-4 shadow-md z-10">
+        <div class="flex flex-wrap justify-between items-center gap-4">
+            <h1 class="text-xl font-bold flex items-center gap-2">
+                <i class="fa-solid fa-truck-ramp-box"></i> 配送スケジュール管理
+            </h1>
+            
+            <div class="flex items-center gap-2 flex-wrap">
+                <!-- ファイル操作 -->
+                <div class="flex bg-slate-700 rounded p-1 gap-1">
+                    <button @click="triggerFileInput" class="btn-tool" title="CSVインポート">
+                        <i class="fa-solid fa-file-import"></i> <span class="hidden sm:inline">読込</span>
+                    </button>
+                    <input type="file" ref="fileInput" @change="importCSV" accept=".csv" class="hidden">
+                    
+                    <button @click="exportCSV" class="btn-tool" title="CSVエクスポート">
+                        <i class="fa-solid fa-file-export"></i> <span class="hidden sm:inline">出力</span>
+                    </button>
+                </div>
+
+                <!-- 編集操作 -->
+                <button @click="addColumn" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-sm transition shadow">
+                    <i class="fa-solid fa-plus"></i> 列追加
+                </button>
+                <button @click="addRow" class="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-sm transition shadow">
+                    <i class="fa-solid fa-plus"></i> 行追加
+                </button>
+                
+                <button @click="resetData" class="text-red-300 hover:text-red-100 text-sm ml-2" title="全データ削除">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- メイングリッドエリア -->
+    <main class="flex-1 overflow-auto p-4 relative" @click="closeContextMenu">
+        <div class="inline-block min-w-full align-middle">
+            <div class="border rounded-lg overflow-hidden bg-white shadow">
+                <table class="min-w-full">
+                    <thead class="bg-slate-100 sticky top-0 z-10">
+                        <tr ref="headerRow">
+                            <!-- 行操作用カラム（固定） -->
+                            <th class="w-10 bg-slate-200 text-center py-2 text-xs font-semibold text-gray-500">
+                                No.
+                            </th>
+                            <!-- 動的カラム -->
+                            <th v-for="(col, index) in columns" :key="col.id" 
+                                class="group px-1 py-2 text-left text-sm font-semibold text-gray-700 relative min-w-[150px]"
+                                :data-id="col.id">
+                                <div class="flex items-center justify-between px-2">
+                                    <input type="text" v-model="col.name" @change="saveData"
+                                           class="bg-transparent border-none outline-none font-bold w-full focus:bg-white focus:ring-1 focus:ring-blue-300 rounded px-1">
+                                    
+                                    <div class="flex items-center opacity-0 group-hover:opacity-100 transition-opacity ml-1">
+                                        <i class="fa-solid fa-grip-lines-vertical drag-handle-col cursor-grab p-1 text-gray-400 hover:text-gray-600" title="列を移動"></i>
+                                        <button @click="deleteColumn(index)" class="text-red-400 hover:text-red-600 p-1" title="列を削除">
+                                            <i class="fa-solid fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody ref="bodyRows" class="divide-y divide-gray-200">
+                        <tr v-for="(row, rIndex) in rows" :key="row.id" :data-id="row.id" class="hover:bg-gray-50 group">
+                            <!-- 行操作用セル -->
+                            <th class="bg-slate-50 text-center py-2 relative w-10">
+                                <div class="flex flex-col items-center justify-center gap-2 h-full">
+                                    <span class="text-xs text-gray-400">{{ rIndex + 1 }}</span>
+                                    <i class="fa-solid fa-grip-vertical drag-handle-row cursor-grab text-gray-300 hover:text-gray-500 opacity-0 group-hover:opacity-100"></i>
+                                    <button @click="deleteRow(rIndex)" class="text-red-300 hover:text-red-500 opacity-0 group-hover:opacity-100 text-xs">
+                                        <i class="fa-solid fa-trash"></i>
+                                    </button>
+                                </div>
+                            </th>
+                            
+                            <!-- データセル -->
+                            <td v-for="col in columns" :key="col.id"
+                                :class="[getCellColorClass(row.cells[col.id]?.color)]"
+                                @contextmenu.prevent="openContextMenu($event, row.id, col.id)"
+                                class="relative p-0 transition-colors duration-200">
+                                
+                                <textarea 
+                                    v-model="row.cells[col.id].value" 
+                                    @input="saveData"
+                                    class="cell-input"
+                                    rows="1"
+                                ></textarea>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- 空の状態の表示 -->
+            <div v-if="rows.length === 0" class="text-center py-10 text-gray-400">
+                <i class="fa-solid fa-clipboard-list text-4xl mb-3"></i>
+                <p>データがありません。「行追加」ボタンを押してください。</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- フッター -->
+    <footer class="bg-white border-t p-2 text-center text-xs text-gray-500">
+        <p>セルを右クリックすると色（ステータス）を変更できます。データは自動保存されます。</p>
+    </footer>
+
+    <!-- コンテキストメニュー (右クリックメニュー) -->
+    <div v-if="contextMenu.visible" 
+         :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }" 
+         class="context-menu">
+        <div class="px-3 py-2 bg-gray-100 text-xs font-bold text-gray-600 border-b">ステータス変更</div>
+        
+        <div @click="setCellColor('none')" class="context-menu-item">
+            <div class="w-4 h-4 border bg-white rounded"></div> 標準 (クリア)
+        </div>
+        <div @click="setCellColor('gray')" class="context-menu-item">
+            <div class="w-4 h-4 rounded bg-status-gray border border-gray-300"></div> 未対応
+        </div>
+        <div @click="setCellColor('yellow')" class="context-menu-item">
+            <div class="w-4 h-4 rounded bg-status-yellow border border-yellow-300"></div> 準備中
+        </div>
+        <div @click="setCellColor('green')" class="context-menu-item">
+            <div class="w-4 h-4 rounded bg-status-green border border-green-300"></div> 配送済み
+        </div>
+        <div @click="setCellColor('red')" class="context-menu-item">
+            <div class="w-4 h-4 rounded bg-status-red border border-red-300"></div> 問題あり
+        </div>
+    </div>
+
+</div>
+
+<script>
+    const { createApp, ref, onMounted, nextTick, watch } = Vue;
+
+    createApp({
+        setup() {
+            // データ構造
+            const columns = ref([]);
+            const rows = ref([]);
+            const contextMenu = ref({ visible: false, x: 0, y: 0, rowId: null, colId: null });
+            const fileInput = ref(null);
+            
+            // デフォルトの初期データ
+            const defaultColumns = [
+                { id: 'c_date', name: '日付' },
+                { id: 'c_customer', name: '顧客名' },
+                { id: 'c_material', name: '屋根材種類' },
+                { id: 'c_qty', name: '数量' },
+                { id: 'c_address', name: '配送先' },
+                { id: 'c_status', name: '状況' }
+            ];
+
+            const defaultRows = [
+                {
+                    id: 'r_1',
+                    cells: {
+                        c_date: { value: '1/15', color: 'none' },
+                        c_customer: { value: '田中工務店', color: 'none' },
+                        c_material: { value: 'ガルバリウム鋼板', color: 'none' },
+                        c_qty: { value: '20枚', color: 'none' },
+                        c_address: { value: '東京都渋谷区', color: 'none' },
+                        c_status: { value: '準備中', color: 'yellow' }
+                    }
+                },
+                {
+                    id: 'r_2',
+                    cells: {
+                        c_date: { value: '1/16', color: 'none' },
+                        c_customer: { value: '鈴木建設', color: 'none' },
+                        c_material: { value: 'トタン板', color: 'none' },
+                        c_qty: { value: '30枚', color: 'none' },
+                        c_address: { value: '神奈川県横浜市', color: 'none' },
+                        c_status: { value: '未対応', color: 'gray' }
+                    }
+                }
+            ];
+
+            // --- ユーティリティ ---
+            const generateId = () => Math.random().toString(36).substr(2, 9);
+
+            // --- データのロード/保存 ---
+            const loadData = () => {
+                const savedData = localStorage.getItem('roofScheduleData');
+                if (savedData) {
+                    try {
+                        const parsed = JSON.parse(savedData);
+                        columns.value = parsed.columns;
+                        rows.value = parsed.rows;
+                    } catch (e) {
+                        console.error("データ読み込みエラー", e);
+                        resetData();
+                    }
+                } else {
+                    resetData(true);
+                }
+            };
+
+            const saveData = () => {
+                localStorage.setItem('roofScheduleData', JSON.stringify({
+                    columns: columns.value,
+                    rows: rows.value
+                }));
+            };
+
+            const resetData = (useDefault = false) => {
+                if (!useDefault && !confirm("本当にすべてのデータを削除して初期化しますか？")) return;
+                columns.value = JSON.parse(JSON.stringify(defaultColumns));
+                rows.value = JSON.parse(JSON.stringify(defaultRows));
+                saveData();
+            };
+
+            // --- グリッド操作 ---
+            const addRow = () => {
+                const newRow = { id: 'r_' + generateId(), cells: {} };
+                // 全カラムに対応する空セルを作成
+                columns.value.forEach(col => {
+                    newRow.cells[col.id] = { value: '', color: 'none' };
+                });
+                rows.value.push(newRow);
+                saveData();
+                
+                // スクロール最下部へ
+                nextTick(() => {
+                    const main = document.querySelector('main');
+                    main.scrollTop = main.scrollHeight;
+                });
+            };
+
+            const deleteRow = (index) => {
+                if(confirm('この行を削除しますか？')) {
+                    rows.value.splice(index, 1);
+                    saveData();
+                }
+            };
+
+            const addColumn = () => {
+                const colId = 'c_' + generateId();
+                columns.value.push({ id: colId, name: '新規列' });
+                
+                // 既存の全行に新しい列のセルを追加
+                rows.value.forEach(row => {
+                    row.cells[colId] = { value: '', color: 'none' };
+                });
+                saveData();
+            };
+
+            const deleteColumn = (index) => {
+                if(confirm('この列を削除しますか？含まれるデータも削除されます。')) {
+                    const colId = columns.value[index].id;
+                    columns.value.splice(index, 1);
+                    // データ側のクリーンアップ（必須ではないがメモリ節約のため）
+                    rows.value.forEach(row => {
+                        delete row.cells[colId];
+                    });
+                    saveData();
+                }
+            };
+
+            // --- コンテキストメニュー（色変更） ---
+            const openContextMenu = (e, rowId, colId) => {
+                contextMenu.value = {
+                    visible: true,
+                    x: Math.min(e.clientX, window.innerWidth - 200), // 画面外にはみ出さないように
+                    y: Math.min(e.clientY, window.innerHeight - 200),
+                    rowId: rowId,
+                    colId: colId
+                };
+            };
+
+            const closeContextMenu = () => {
+                contextMenu.value.visible = false;
+            };
+
+            const setCellColor = (color) => {
+                if (contextMenu.value.rowId && contextMenu.value.colId) {
+                    const row = rows.value.find(r => r.id === contextMenu.value.rowId);
+                    if (row && row.cells[contextMenu.value.colId]) {
+                        row.cells[contextMenu.value.colId].color = color;
+                        saveData();
+                    }
+                }
+                closeContextMenu();
+            };
+
+            const getCellColorClass = (colorCode) => {
+                switch (colorCode) {
+                    case 'gray': return 'bg-status-gray';
+                    case 'yellow': return 'bg-status-yellow';
+                    case 'green': return 'bg-status-green';
+                    case 'red': return 'bg-status-red';
+                    default: return 'bg-white';
+                }
+            };
+
+            // --- CSV エクスポート/インポート ---
+            const exportCSV = () => {
+                // BOM付与（Excelで文字化けしないように）
+                let csvContent = "\uFEFF";
+                
+                // ヘッダー
+                csvContent += columns.value.map(c => `"${c.name}"`).join(",") + "\n";
+                
+                // データ
+                rows.value.forEach(row => {
+                    const rowData = columns.value.map(col => {
+                        const cellText = row.cells[col.id]?.value || "";
+                        // 改行やダブルクォートのエスケープ処理
+                        return `"${cellText.replace(/"/g, '""')}"`;
+                    });
+                    csvContent += rowData.join(",") + "\n";
+                });
+
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", `配送スケジュール_${new Date().toLocaleDateString()}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const triggerFileInput = () => {
+                fileInput.value.click();
+            };
+
+            const importCSV = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const text = e.target.result;
+                    // 行に分割
+                    const lines = text.split(/\r\n|\n/).filter(line => line.trim() !== '');
+                    if (lines.length < 1) return;
+
+                    // 単純なCSVパーサー（引用符内のカンマ考慮）
+                    const parseCSVLine = (line) => {
+                        const res = [];
+                        let inQuote = false;
+                        let field = '';
+                        for (let i = 0; i < line.length; i++) {
+                            const char = line[i];
+                            if (char === '"') {
+                                if (i + 1 < line.length && line[i + 1] === '"') {
+                                    field += '"';
+                                    i++;
+                                } else {
+                                    inQuote = !inQuote;
+                                }
+                            } else if (char === ',' && !inQuote) {
+                                res.push(field);
+                                field = '';
+                            } else {
+                                field += char;
+                            }
+                        }
+                        res.push(field);
+                        return res;
+                    };
+
+                    const csvHeaders = parseCSVLine(lines[0]);
+                    
+                    // 新しいデータ構造構築
+                    const newColumns = [];
+                    csvHeaders.forEach(h => {
+                        newColumns.push({ id: 'c_' + generateId(), name: h });
+                    });
+
+                    const newRows = [];
+                    for (let i = 1; i < lines.length; i++) {
+                        const data = parseCSVLine(lines[i]);
+                        const newRow = { id: 'r_' + generateId(), cells: {} };
+                        
+                        newColumns.forEach((col, idx) => {
+                            newRow.cells[col.id] = { 
+                                value: data[idx] || '', 
+                                color: 'none' 
+                            };
+                        });
+                        newRows.push(newRow);
+                    }
+
+                    if (confirm('現在のデータを上書きしてCSVを取り込みますか？')) {
+                        columns.value = newColumns;
+                        rows.value = newRows;
+                        saveData();
+                    }
+                    // Inputリセット
+                    event.target.value = '';
+                };
+                reader.readAsText(file);
+            };
+
+            // --- ドラッグ&ドロップ初期化 ---
+            onMounted(() => {
+                loadData();
+
+                // 列の並び替え
+                const headerRow = document.querySelector('thead tr');
+                Sortable.create(headerRow, {
+                    handle: '.drag-handle-col',
+                    animation: 150,
+                    onEnd: (evt) => {
+                        const item = columns.value.splice(evt.oldIndex - 1, 1)[0]; // -1 because of "No." column
+                        columns.value.splice(evt.newIndex - 1, 0, item);
+                        saveData();
+                    }
+                });
+
+                // 行の並び替え
+                const bodyRows = document.querySelector('tbody');
+                Sortable.create(bodyRows, {
+                    handle: '.drag-handle-row',
+                    animation: 150,
+                    onEnd: (evt) => {
+                        const item = rows.value.splice(evt.oldIndex, 1)[0];
+                        rows.value.splice(evt.newIndex, 0, item);
+                        saveData();
+                    }
+                });
+            });
+
+            return {
+                columns,
+                rows,
+                contextMenu,
+                fileInput,
+                addRow,
+                deleteRow,
+                addColumn,
+                deleteColumn,
+                saveData,
+                resetData,
+                openContextMenu,
+                closeContextMenu,
+                setCellColor,
+                getCellColorClass,
+                exportCSV,
+                triggerFileInput,
+                importCSV
+            };
+        }
+    }).mount('#app');
+</script>
+
+<style>
+    /* ボタンスタイル */
+    .btn-tool {
+        background-color: transparent;
+        color: #e2e8f0;
+        padding: 4px 12px;
+        border-radius: 4px;
+        transition: all 0.2s;
+        font-size: 0.875rem;
+    }
+    .btn-tool:hover {
+        background-color: rgba(255,255,255,0.1);
+        color: white;
+    }
+</style>
+</body>
+</html>
