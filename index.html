@@ -29,7 +29,7 @@
             align-items: center;
         }
 
-        /* テキストエリア（文字入力用） */
+        /* テキストエリア */
         .cell-textarea {
             width: 100%;
             background: transparent;
@@ -41,7 +41,7 @@
             field-sizing: content;
         }
 
-        /* カレンダー入力用 */
+        /* カレンダー */
         .cell-date {
             width: 100%;
             background: transparent;
@@ -52,7 +52,22 @@
             cursor: pointer;
         }
 
-        /* 数値カウンター用 */
+        /* プルダウン選択（ステータス用） */
+        .cell-select {
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            border: none;
+            outline: none;
+            padding: 0 8px;
+            cursor: pointer;
+            appearance: none; /* デフォルトの矢印を消す場合 */
+            -webkit-appearance: none;
+            font-weight: bold;
+            color: #444;
+        }
+
+        /* 数値カウンター */
         .cell-counter {
             display: flex;
             width: 100%;
@@ -78,7 +93,7 @@
             border: none;
             background: transparent;
             outline: none;
-            width: 50px; /* 最小幅 */
+            width: 50px;
             -moz-appearance: textfield;
         }
         .counter-input::-webkit-outer-spin-button,
@@ -187,7 +202,7 @@
                                         </div>
                                     </div>
                                     
-                                    <!-- 列タイプの切り替え（アイコン表示） -->
+                                    <!-- 列タイプの切り替え -->
                                     <div class="flex gap-2 text-xs text-gray-400 pl-1">
                                         <button @click="changeColumnType(col, 'text')" :class="{'text-blue-600 font-bold': col.type === 'text'}" title="文字入力">
                                             <i class="fa-solid fa-font"></i>
@@ -197,6 +212,9 @@
                                         </button>
                                         <button @click="changeColumnType(col, 'number')" :class="{'text-blue-600 font-bold': col.type === 'number'}" title="数値・カウント">
                                             <i class="fa-solid fa-arrow-up-9-1"></i>
+                                        </button>
+                                        <button @click="changeColumnType(col, 'status')" :class="{'text-blue-600 font-bold': col.type === 'status'}" title="状況選択(プルダウン)">
+                                            <i class="fa-solid fa-list-check"></i>
                                         </button>
                                     </div>
                                 </div>
@@ -224,7 +242,7 @@
                                 
                                 <div class="cell-content">
                                     
-                                    <!-- タイプ: カレンダー (日付) -->
+                                    <!-- タイプ: カレンダー -->
                                     <input v-if="col.type === 'date'" 
                                            type="date" 
                                            v-model="row.cells[col.id].value" 
@@ -244,6 +262,24 @@
                                         <button @click="updateNumber(row.cells[col.id], 1)" class="counter-btn text-green-600 hover:text-green-800">
                                             <i class="fa-solid fa-plus"></i>
                                         </button>
+                                    </div>
+
+                                    <!-- タイプ: ステータス (プルダウン) -->
+                                    <div v-else-if="col.type === 'status'" class="w-full h-full relative group">
+                                        <select 
+                                            :value="row.cells[col.id].value" 
+                                            @change="(e) => updateStatus(row.cells[col.id], e.target.value)"
+                                            class="cell-select">
+                                            <option value="">標準 (クリア)</option>
+                                            <option value="未対応">未対応</option>
+                                            <option value="準備中">準備中</option>
+                                            <option value="配送済み">配送済み</option>
+                                            <option value="問題あり">問題あり</option>
+                                        </select>
+                                        <!-- 下向き矢印アイコン (補助) -->
+                                        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400 group-hover:text-gray-600">
+                                            <i class="fa-solid fa-caret-down text-xs"></i>
+                                        </div>
                                     </div>
 
                                     <!-- タイプ: テキスト (標準) -->
@@ -268,7 +304,7 @@
     </main>
 
     <footer class="bg-white border-t p-2 text-center text-xs text-gray-500">
-        <p>セル右クリックで色変更。ヘッダーのアイコンで列タイプ（文字・日付・数値）を変更可能。</p>
+        <p>セル右クリックでも色を変更できます。状況列はプルダウンで選択すると色も変わります。</p>
     </footer>
 
     <!-- コンテキストメニュー -->
@@ -306,14 +342,22 @@
             const contextMenu = ref({ visible: false, x: 0, y: 0, rowId: null, colId: null });
             const fileInput = ref(null);
             
-            // 列定義に type を追加
+            // ステータス定義
+            const statusMap = {
+                '': 'none',
+                '未対応': 'gray',
+                '準備中': 'yellow',
+                '配送済み': 'green',
+                '問題あり': 'red'
+            };
+
             const defaultColumns = [
                 { id: 'c_date', name: '日付', type: 'date' },
                 { id: 'c_customer', name: '顧客名', type: 'text' },
                 { id: 'c_material', name: '屋根材種類', type: 'text' },
                 { id: 'c_qty', name: '数量 (枚)', type: 'number' },
                 { id: 'c_address', name: '配送先', type: 'text' },
-                { id: 'c_status', name: '状況', type: 'text' }
+                { id: 'c_status', name: '状況', type: 'status' } // ここをstatusに変更
             ];
 
             const defaultRows = [
@@ -344,19 +388,17 @@
             const generateId = () => Math.random().toString(36).substr(2, 9);
 
             const loadData = () => {
-                const savedData = localStorage.getItem('roofScheduleData_v2');
+                const savedData = localStorage.getItem('roofScheduleData_v3');
                 if (savedData) {
                     try {
                         const parsed = JSON.parse(savedData);
                         columns.value = parsed.columns;
                         rows.value = parsed.rows;
-                        
-                        // 旧データ移行用（typeがない場合の補完）
+                        // データの整合性確保
                         columns.value.forEach(col => {
-                            if (!col.type) col.type = 'text';
+                            if (!col.type) col.type = col.name.includes('状況') ? 'status' : 'text';
                         });
                     } catch (e) {
-                        console.error(e);
                         resetData();
                     }
                 } else {
@@ -365,7 +407,7 @@
             };
 
             const saveData = () => {
-                localStorage.setItem('roofScheduleData_v2', JSON.stringify({
+                localStorage.setItem('roofScheduleData_v3', JSON.stringify({
                     columns: columns.value,
                     rows: rows.value
                 }));
@@ -416,21 +458,33 @@
                 }
             };
             
-            // 列のタイプ変更
             const changeColumnType = (col, type) => {
                 col.type = type;
                 saveData();
             };
 
-            // 数値の更新（カウンター用）
+            // 数値更新
             const updateNumber = (cell, delta) => {
                 let val = parseInt(cell.value) || 0;
                 val += delta;
-                if (val < 0) val = 0; // マイナス防止
+                if (val < 0) val = 0;
                 cell.value = val;
                 saveData();
             };
 
+            // ステータス更新（プルダウン用）
+            const updateStatus = (cell, newVal) => {
+                cell.value = newVal;
+                // 値に応じて色も自動変更
+                if (statusMap[newVal]) {
+                    cell.color = statusMap[newVal];
+                } else {
+                    cell.color = 'none';
+                }
+                saveData();
+            };
+
+            // コンテキストメニュー関連
             const openContextMenu = (e, rowId, colId) => {
                 contextMenu.value = {
                     visible: true,
@@ -463,6 +517,7 @@
                 }
             };
 
+            // CSV関連
             const exportCSV = () => {
                 let csvContent = "\uFEFF";
                 csvContent += columns.value.map(c => `"${c.name}"`).join(",") + "\n";
@@ -505,11 +560,13 @@
                     };
 
                     const csvHeaders = parseCSVLine(lines[0]);
-                    const newColumns = csvHeaders.map(h => ({ 
-                        id: 'c_' + generateId(), 
-                        name: h, 
-                        type: h.includes('日付') ? 'date' : (h.includes('数') || h.includes('量') ? 'number' : 'text') 
-                    }));
+                    const newColumns = csvHeaders.map(h => {
+                        let type = 'text';
+                        if (h.includes('日付')) type = 'date';
+                        else if (h.includes('数') || h.includes('量')) type = 'number';
+                        else if (h.includes('状況') || h.includes('ステータス')) type = 'status';
+                        return { id: 'c_' + generateId(), name: h, type: type };
+                    });
 
                     const newRows = [];
                     for (let i = 1; i < lines.length; i++) {
@@ -517,9 +574,12 @@
                         const newRow = { id: 'r_' + generateId(), cells: {} };
                         newColumns.forEach((col, idx) => {
                             let val = data[idx] || '';
-                            // 数値列なら数値変換
+                            let color = 'none';
+                            
                             if(col.type === 'number') val = parseInt(val) || 0;
-                            newRow.cells[col.id] = { value: val, color: 'none' };
+                            if(col.type === 'status' && statusMap[val]) color = statusMap[val];
+
+                            newRow.cells[col.id] = { value: val, color: color };
                         });
                         newRows.push(newRow);
                     }
@@ -562,7 +622,7 @@
                 columns, rows, contextMenu, fileInput,
                 addRow, deleteRow, addColumn, deleteColumn, changeColumnType,
                 saveData, resetData, openContextMenu, closeContextMenu,
-                setCellColor, getCellColorClass, updateNumber,
+                setCellColor, getCellColorClass, updateNumber, updateStatus,
                 exportCSV, triggerFileInput, importCSV
             };
         }
